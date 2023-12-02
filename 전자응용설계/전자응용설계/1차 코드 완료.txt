@@ -1,0 +1,148 @@
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <util/delay.h>
+
+// LCD 관련 상수 정의
+#define LCD_CONTROL PORTG
+#define LCD_DATABUS PORTB
+#define LCD_RS 0
+#define LCD_RW 1
+#define LCD_EN 2
+
+// 함수 원형 선언
+void MCU_initialize(void);
+void LCD_initialize(void);
+void LCD_command(unsigned char command);
+void LCD_data(unsigned char data);
+void LCD_print(char *str);
+void ADC_initialize(void);
+uint16_t ADC_read(uint8_t channel);
+void display_voltage(uint16_t adc_value);
+
+int main(void)
+{
+    MCU_initialize(); // MCU 초기화
+    LCD_initialize(); // LCD 초기화
+    ADC_initialize(); // ADC 초기화
+    
+    // 초기화 화면 출력
+    LCD_command(0x80); // 첫번째 줄로 커서 이동
+    LCD_print("A/D Conv. Test");
+    LCD_command(0xC0); // 두번째 줄로 커서 이동
+    LCD_print("tested by ACCL");
+    
+    while (1)
+    {
+        uint16_t adc_value = ADC_read(6); // ADC6 값 읽기
+        display_voltage(adc_value);      // 전압 값 LCD에 표시
+    }
+    
+    return 0;
+}
+
+void MCU_initialize(void)
+{
+    MCUCR = 0x80; // Enable external memory and I/O, Disable SLEEP mode
+    XMCRA = 0x44; // 0x1100 - 0x7FFF (1 wait), 0x8000 - 0xFFFF (0 wait)
+    XMCRB = 0x80; // Enable bus keeper. Use PC0-PC7 as high byte of address bus
+    DDRB = 0xF0;  // 입력/출력 방향결정, PORTB7..4 = output, PORTB3..0 = Input
+    PORTB = 0x00; // I/O pin 초기값 지정
+    DDRD = 0xFD;  // Port D7..2 = output, “1= Output, 0= Input”
+    PORTD = 0x00; // Port D1..0 = Input
+    DDRE = 0x0A;  // Port E1,3 = output, All other PORTs are Input
+    PORTE = 0xE0;
+    DDRF = 0x00;  // Port F = Input
+    PORTF = 0x00;
+    DDRG = 0x1F;
+    LCD_CONTROL = 0x00; // LCD 제어
+    LCD_DATABUS = 0x00; // LCD Data
+}
+
+void LCD_initialize(void)
+{
+    _delay_ms(50);       // 전원 인가 후 50ms 대기
+    LCD_command(0x38);   // 8비트 데이터 버스, 2줄 디스플레이, 5x8 폰트
+    LCD_command(0x0C);   // 디스플레이 ON, 커서 OFF
+    LCD_command(0x01);   // 화면 지움
+    _delay_ms(2);        // 지움 명령 후 2ms 대기
+}
+
+void LCD_command(unsigned char command)
+{
+    LCD_CONTROL &= ~(1 << LCD_RS); // RS = 0 (명령 모드)
+    LCD_CONTROL &= ~(1 << LCD_RW); // RW = 0 (쓰기 모드)
+    LCD_DATABUS = command;          // 명령 데이터 설정
+    
+    LCD_CONTROL |= (1 << LCD_EN);  // Enable 신호 발생
+    _delay_us(1);                  // Enable 신호 폭 1us 유지
+    LCD_CONTROL &= ~(1 << LCD_EN); // Enable 신호 비활성화
+    
+    _delay_us(100); // 일반적인 명령 시간 대기
+}
+
+void LCD_data(unsigned char data)
+{
+    LCD_CONTROL |= (1 << LCD_RS); // RS = 1 (데이터 모드)
+    LCD_CONTROL &= ~(1 << LCD_RW); // RW = 0 (쓰기 모드)
+    LCD_DATABUS = data;            // 데이터 설정
+    
+    LCD_CONTROL |= (1 << LCD_EN);  // Enable 신호 발생
+    _delay_us(1);                  // Enable 신호 폭 1us 유지
+    LCD_CONTROL &= ~(1 << LCD_EN); // Enable 신호 비활성화
+    
+    _delay_us(100); // 일반적인 데이터 시간 대기
+}
+
+void LCD_print(char *str)
+{
+    while (*str)
+    {
+        LCD_data(*str++);
+    }
+}
+
+void ADC_initialize(void)
+{
+    ADMUX = (1 << REFS0);    // AVCC를 기준 전압으로 사용
+    ADCSRA = (1 << ADEN) |   // ADC 활성화
+             (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0); // 분주비 128 설정
+}
+
+uint16_t ADC_read(uint8_t channel)
+{
+    ADMUX = (ADMUX & 0xF8) | (channel & 0x07); // 입력 채널 선택
+    
+    ADCSRA |= (1 << ADSC); // 변환 시작
+    
+    while (ADCSRA & (1 << ADSC))
+    {
+        ; // 변환 완료 대기
+    }
+    
+    return ADC;
+}
+
+void display_voltage(uint16_t adc_value)
+{
+    float voltage = adc_value * (5.0 / 1023.0); // ADC 값에 대응하는 전압 계산
+    
+    LCD_command(0x80);               // 첫번째 줄로 커서 이동
+    LCD_print("Digital Voltmeter:"); // 문구 출력
+    
+    LCD_command(0xC0);          // 두번째 줄로 커서 이동
+    LCD_1d2(voltage);           // 전압 값 출력
+    LCD_print("V");             // 단위 출력
+}
+
+void LCD_1d2(float number)
+{
+    int i, j;
+    j = (int)(number * 100. + 0.5);
+    i = j / 100;
+    LCD_data(i + '0');
+    LCD_data('.');
+    i = (j % 100) / 10;
+    LCD_data(i + '0');
+    i = j % 10;
+    LCD_data(i + '0');
+}
